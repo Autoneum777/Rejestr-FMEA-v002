@@ -50,7 +50,7 @@ final class ImportControlPlans
 
     public static function defaultPath(): string
     {
-        return dirname(Database::root()) . DIRECTORY_SEPARATOR . 'Rejestr PLANOW KONTROLI.xlsx';
+        return dirname(Database::root(), 2) . DIRECTORY_SEPARATOR . 'Rejestr PLANOW KONTROLI.xlsx';
     }
 
     public function import(?string $path = null, bool $replace = true): array

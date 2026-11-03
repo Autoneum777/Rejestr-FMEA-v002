@@ -1,9 +1,41 @@
-/vendor/
-/composer.phar
-/data/*.db
-/data/*.xlsx
-/data/mail.json
-__pycache__/
-*.pyc
+# Secrets
 .env
 .env.*
+!.env.example
+
+# PHP
+/api/vendor/
+/api/composer.phar
+
+# Database, imports, and mail credentials
+/api/data/*.db
+/api/data/*.db-journal
+/api/data/*.db-wal
+/api/data/*.db-shm
+/api/data/*.sqlite
+/api/data/*.xlsx
+/api/data/*.xlsm
+/api/data/mail.json
+
+# Node and Vite
+node_modules/
+/frontend/dist/
+*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo

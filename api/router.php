@@ -10,40 +10,30 @@ use App\Register;
 
 require __DIR__ . '/vendor/autoload.php';
 
-$rawUri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
-$rawUri = rawurldecode(is_string($rawUri) ? $rawUri : '/');
-$uri = Http::stripBase($rawUri);
-$file = __DIR__ . str_replace('/', DIRECTORY_SEPARATOR, $uri);
-$relative = ltrim(str_replace('\\', '/', substr($file, strlen(__DIR__))), '/');
-$extension = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-if ($uri !== '/' && is_file($file) && $extension !== 'php' && !str_starts_with($relative, 'data/')) {
-    if ($rawUri === $uri) {
-        return false;
+$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+$path = Http::path();
+
+if ($method === 'GET' && !str_starts_with($path, '/api')) {
+    if (!serveFrontend($path)) {
+        header('Content-Type: text/plain; charset=utf-8');
+        http_response_code(503);
+        echo "Brak zbudowanego interfejsu.\nUruchom npm run dev i otwórz http://127.0.0.1:5173\n";
+        exit;
     }
-    $types = [
-        'css' => 'text/css; charset=utf-8',
-        'js' => 'text/javascript; charset=utf-8',
-        'png' => 'image/png',
-        'html' => 'text/html; charset=utf-8',
-        'ico' => 'image/x-icon',
-    ];
-    Http::file($file, $types[$extension] ?? 'application/octet-stream');
 }
 
 $database = Database::open();
 $database->init();
 $register = new Register($database);
-$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$path = Http::path();
 
 try {
-    if ($method === 'GET' && $path === '/') {
+    if ($method === 'POST' && $path === '/api/reminders') {
         try {
             (new App\Notifier($database))->reminders();
         } catch (Throwable $error) {
-            // Strona ma się otworzyć także wtedy, gdy kolejka poczty zgłosi błąd.
+            // Kolejka poczty nie może zablokować interfejsu.
         }
-        Http::file(__DIR__ . '/templates/index.html', 'text/html; charset=utf-8');
+        Http::json(['ok' => true]);
     }
     route($method, $path, $register);
     Http::json(['error' => 'Nie znaleziono adresu'], 404);
@@ -156,4 +146,47 @@ function route(string $method, string $path, Register $register): void
     if ($method === 'POST' && preg_match('#^/api/cp/(\d+)/reviews$#', $path, $match)) {
         Http::json($register->addCpReview((int) $match[1], Http::jsonBody()));
     }
+}
+
+function serveFrontend(string $path): bool
+{
+    $dist = realpath(dirname(__DIR__) . '/frontend/dist');
+    if ($dist === false) {
+        return false;
+    }
+    $relative = ltrim(str_replace('\\', '/', $path), '/');
+    if (str_contains($relative, '..')) {
+        Http::json(['error' => 'Nie znaleziono pliku'], 404);
+    }
+    if ($relative !== '') {
+        $candidate = $dist . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relative);
+        $real = realpath($candidate);
+        $prefix = rtrim(strtolower($dist), '\\/') . DIRECTORY_SEPARATOR;
+        if (is_string($real) && is_file($real) && str_starts_with(strtolower($real), $prefix)) {
+            $extension = strtolower(pathinfo($real, PATHINFO_EXTENSION));
+            $types = [
+                'css' => 'text/css; charset=utf-8',
+                'js' => 'text/javascript; charset=utf-8',
+                'mjs' => 'text/javascript; charset=utf-8',
+                'png' => 'image/png',
+                'svg' => 'image/svg+xml',
+                'html' => 'text/html; charset=utf-8',
+                'ico' => 'image/x-icon',
+                'json' => 'application/json; charset=utf-8',
+                'map' => 'application/json; charset=utf-8',
+                'woff' => 'font/woff',
+                'woff2' => 'font/woff2',
+                'txt' => 'text/plain; charset=utf-8',
+            ];
+            Http::file($real, $types[$extension] ?? 'application/octet-stream');
+        }
+        if (pathinfo($relative, PATHINFO_EXTENSION) !== '') {
+            Http::json(['error' => 'Nie znaleziono pliku'], 404);
+        }
+    }
+    $index = $dist . DIRECTORY_SEPARATOR . 'index.html';
+    if (!is_file($index)) {
+        return false;
+    }
+    Http::file($index, 'text/html; charset=utf-8');
 }

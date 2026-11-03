@@ -36,6 +36,7 @@ $php = PHP_BINARY;
 $ini = __DIR__ . DIRECTORY_SEPARATOR . 'php.ini';
 $router = __DIR__ . DIRECTORY_SEPARATOR . 'router.php';
 $command = escapeshellarg($php) . ' -c ' . escapeshellarg($ini) . ' -S 127.0.0.1:5050 ' . escapeshellarg($router);
-echo "Rejestr FMEA: http://127.0.0.1:5050\n";
+echo "API: http://127.0.0.1:5050\n";
+echo "Interfejs: http://127.0.0.1:5173\n";
 passthru($command, $code);
 exit($code);

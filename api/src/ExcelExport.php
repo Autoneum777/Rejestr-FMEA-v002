@@ -162,7 +162,12 @@ final class ExcelExport
         $sheet->mergeCells([1, 2, max($span - 3, 2), 2]);
         $sheet->setCellValue([1, 2], $subtitle);
         $sheet->getStyle([1, 2])->getFont()->setName('Segoe UI')->setSize(10)->getColor()->setRGB(self::GRAY);
-        $logo = Database::root() . DIRECTORY_SEPARATOR . 'static' . DIRECTORY_SEPARATOR . 'logo-autoneum.png';
+        $project = dirname(Database::root());
+        $logo = $project . DIRECTORY_SEPARATOR . 'static' . DIRECTORY_SEPARATOR . 'logo-autoneum.png';
+        $bundled = $project . DIRECTORY_SEPARATOR . 'frontend' . DIRECTORY_SEPARATOR . 'public' . DIRECTORY_SEPARATOR . 'logo-autoneum.png';
+        if (!is_file($logo)) {
+            $logo = $bundled;
+        }
         if (is_file($logo)) {
             $size = getimagesize($logo) ?: [168, 42];
             $drawing = new Drawing();

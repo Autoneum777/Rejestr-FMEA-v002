@@ -18,7 +18,15 @@ final class Http
 
     public static function path(): string
     {
-        $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+        $raw = '/';
+        foreach (['UNENCODED_URL', 'HTTP_X_ORIGINAL_URL', 'REQUEST_URI'] as $key) {
+            $value = $_SERVER[$key] ?? '';
+            if (is_string($value) && $value !== '') {
+                $raw = $value;
+                break;
+            }
+        }
+        $path = parse_url($raw, PHP_URL_PATH);
         $path = self::stripBase(is_string($path) ? rawurldecode($path) : '/');
         return rtrim($path, '/') ?: '/';
     }

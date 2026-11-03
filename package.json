@@ -2,6 +2,8 @@
   "name": "rejestr-fmea",
   "private": true,
   "scripts": {
-    "dev": "C:\\php-8.5.11\\php.exe -c php.ini dev.php"
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "C:\\php-8.5.11\\php.exe -c api/php.ini api/dev.php",
+    "build": "npm run build --prefix frontend"
   }
 }
