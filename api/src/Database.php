@@ -201,6 +201,10 @@ SQL;
         $this->ensureColumn('control_plans', 'data_anulowania', 'TEXT');
         $this->ensureColumn('control_plans', 'wymaga_weryfikacji', 'INTEGER NOT NULL DEFAULT 0');
         $this->ensureColumn('users', 'dzial', "TEXT NOT NULL DEFAULT ''");
+        $this->ensureColumn('users', 'login', "TEXT NOT NULL DEFAULT ''");
+        $this->ensureColumn('users', 'password_hash', "TEXT NOT NULL DEFAULT ''");
+        $this->ensureColumn('users', 'role', "TEXT NOT NULL DEFAULT 'user'");
+        $this->pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login ON users(login) WHERE login <> \'\'');
         $stmt = $this->pdo->prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
         foreach (self::DEFAULT_SETTINGS as $key => $value) {
             $stmt->execute([$key, $value]);

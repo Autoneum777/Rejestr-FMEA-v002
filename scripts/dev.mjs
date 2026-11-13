@@ -5,6 +5,18 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const preferredPhp = 'C:\\php-8.5.11\\php.exe'
+const vendorAutoload = path.join(root, 'api', 'vendor', 'autoload.php')
+
+if (!existsSync(vendorAutoload)) {
+  console.error(
+    'Brak api/vendor (zależności PHP).\n'
+      + 'W katalogu api uruchom:\n'
+      + '  php -c php.ini composer.phar install\n'
+      + '(composer.phar pobierz z https://getcomposer.org/download/ jeśli go nie masz)\n'
+      + 'albo: composer install',
+  )
+  process.exit(1)
+}
 
 function phpBinary() {
   if (existsSync(preferredPhp)) return preferredPhp

@@ -4,16 +4,14 @@ import StatsBar from './StatsBar.vue'
 import { useStickyHead } from '../sticky'
 import { fmtDate, statusLabel } from '../format'
 import {
+  canEdit,
   exportCp,
   filteredCp,
-  importCp,
   loadCp,
   openCpDrawer,
   openCpForm,
   openPersonModal,
-  openPurge,
   openReview,
-  openSettings,
   setCpFilter,
   state,
   toggleCp,
@@ -21,8 +19,9 @@ import {
 } from '../store'
 
 const table = ref(null)
-const file = ref(null)
 useStickyHead(table)
+
+const colSpan = () => (canEdit() ? 11 : 10)
 
 const cards = [
   { key: 'total', label: 'Aktywnych planów' },
@@ -59,17 +58,6 @@ function activeFilter(filter) {
   return state.cpStatus === filter.status && state.cpAktywne === filter.aktywne
 }
 
-async function onFile(event) {
-  const picked = event.target.files?.[0]
-  event.target.value = ''
-  if (!picked) return
-  try {
-    await importCp(picked)
-  } catch (err) {
-    alert(err.message)
-  }
-}
-
 function onRowClick(event, id) {
   if (event.target.closest('button, input, a')) return
   openCpDrawer(id).catch((err) => alert(err.message))
@@ -83,13 +71,11 @@ function onRowClick(event, id) {
       <h1>Rejestr planów kontroli</h1>
     </div>
     <div class="top-actions">
-      <button type="button" class="btn ghost" @click="openSettings">Kolorystyka</button>
-      <button type="button" class="btn ghost" @click="file.click()">Wczytaj plik Excel</button>
-      <input ref="file" type="file" accept=".xlsx,.xlsm" hidden @change="onFile" />
       <button type="button" class="btn blue" @click="exportCp">Eksport do Excela</button>
-      <button type="button" class="btn ghost" @click="openPersonModal('cp')">Zmień osobę</button>
-      <button type="button" class="btn" @click="openCpForm(null)">Nowy plan</button>
-      <button type="button" class="btn danger" @click="openPurge('cp')">Wyczyść bazę</button>
+      <template v-if="canEdit()">
+        <button type="button" class="btn ghost" @click="openPersonModal('cp')">Zmień osobę</button>
+        <button type="button" class="btn" @click="openCpForm(null)">Nowy plan</button>
+      </template>
     </div>
   </header>
 
@@ -113,7 +99,7 @@ function onRowClick(event, id) {
     <table ref="table">
       <thead>
         <tr>
-          <th class="check"><input type="checkbox" title="Zaznacz widoczne" :checked="state.cpCheckAll" @change="toggleVisibleCp($event.target.checked)" /></th>
+          <th v-if="canEdit()" class="check"><input type="checkbox" title="Zaznacz widoczne" :checked="state.cpCheckAll" @change="toggleVisibleCp($event.target.checked)" /></th>
           <th>Plan kontroli nr</th>
           <th>Numer FMEA</th>
           <th>Odpowiedzialny QE</th>
@@ -123,10 +109,10 @@ function onRowClick(event, id) {
           <th>Linia MES</th>
           <th>Data rewizji</th>
           <th>Termin kolejnej rewizji</th>
-          <th></th>
+          <th v-if="canEdit()"></th>
         </tr>
         <tr class="filters-row">
-          <th></th>
+          <th v-if="canEdit()"></th>
           <th><input v-model="state.cpCols.nr_planu" placeholder="Filtr" /></th>
           <th><input v-model="state.cpCols.nr_fmea" placeholder="Filtr" /></th>
           <th><input v-model="state.cpCols.osoba_wiodaca" placeholder="Filtr" /></th>
@@ -136,12 +122,12 @@ function onRowClick(event, id) {
           <th><input v-model="state.cpCols.linia_mes" placeholder="Filtr" /></th>
           <th><input v-model="state.cpCols.last_review_date" placeholder="rrrr-mm-dd" /></th>
           <th><input v-model="state.cpCols.next_due_date" placeholder="rrrr-mm-dd" /></th>
-          <th></th>
+          <th v-if="canEdit()"></th>
         </tr>
       </thead>
       <tbody>
-        <tr v-if="state.cpError"><td colspan="11">{{ state.cpError }}</td></tr>
-        <tr v-else-if="!filteredCp.length"><td colspan="11" class="muted">Brak planów kontroli.</td></tr>
+        <tr v-if="state.cpError"><td :colspan="colSpan()">{{ state.cpError }}</td></tr>
+        <tr v-else-if="!filteredCp.length"><td :colspan="colSpan()" class="muted">Brak planów kontroli.</td></tr>
         <tr
           v-for="item in filteredCp"
           :key="item.id"
@@ -149,7 +135,7 @@ function onRowClick(event, id) {
           :class="item.aktywne ? `row-${item.status}` : 'row-inactive'"
           @click="onRowClick($event, item.id)"
         >
-          <td class="check"><input type="checkbox" :checked="state.selectedCp.has(item.id)" @change="toggleCp(item.id, $event.target.checked)" /></td>
+          <td v-if="canEdit()" class="check"><input type="checkbox" :checked="state.selectedCp.has(item.id)" @change="toggleCp(item.id, $event.target.checked)" /></td>
           <td><strong>{{ item.nr_planu }}</strong></td>
           <td>
             <template v-if="item.nr_fmea">
@@ -168,7 +154,7 @@ function onRowClick(event, id) {
             {{ fmtDate(item.next_due_date) }}
             <div class="muted">{{ item.aktywne ? statusLabel(item.status) : 'Nieaktywny' }}</div>
           </td>
-          <td><button type="button" class="btn small" @click="openReview(item.id, 'cp')">Aktualizuj datę</button></td>
+          <td v-if="canEdit()"><button type="button" class="btn small" @click="openReview(item.id, 'cp')">Aktualizuj datę</button></td>
         </tr>
       </tbody>
     </table>

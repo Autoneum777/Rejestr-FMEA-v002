@@ -17,6 +17,11 @@ export const state = reactive({
   editingCp: null,
   editingCpId: null,
   editingUser: null,
+  deletingUser: null,
+  userDeleteAssignments: [],
+  userDeleteReplacements: {},
+  userDeleteSelected: new Set(),
+  userDeleteBulkUserId: '',
   personKind: 'cp',
   users: [],
   mailReady: false,
@@ -66,6 +71,12 @@ export const state = reactive({
   modal: null,
   fmeaCheckAll: false,
   cpCheckAll: false,
+  auth: {
+    role: 'guest',
+    login: '',
+    name: '',
+    userId: null,
+  },
 })
 
 function matchesCols(item, cols) {
@@ -97,7 +108,59 @@ export function closeDrawer() {
   state.drawerOpen = false
 }
 
+export function canEdit() {
+  return state.auth.role !== 'guest'
+}
+
+export function isAdmin() {
+  return state.auth.role === 'admin'
+}
+
+export function applyAuth(payload) {
+  state.auth = {
+    role: payload?.role || 'guest',
+    login: payload?.login || '',
+    name: payload?.name || '',
+    userId: payload?.user_id ?? null,
+  }
+}
+
+export async function loadAuth() {
+  const data = await api('/api/auth/me')
+  applyAuth(data)
+}
+
+export function openLogin() {
+  state.modal = 'login'
+}
+
+export function openPassword() {
+  state.modal = 'password'
+}
+
+export async function submitLogin(payload) {
+  const result = await api('/api/auth/login', { method: 'POST', body: JSON.stringify(payload) })
+  applyAuth(result.user)
+  closeModal()
+}
+
+export async function logout() {
+  await api('/api/auth/logout', { method: 'POST', body: '{}' })
+  applyAuth({ role: 'guest' })
+  if (state.view === 'admin') state.view = 'fmea'
+}
+
+export async function submitPasswordChange(payload) {
+  await api('/api/auth/password', { method: 'PUT', body: JSON.stringify(payload) })
+  closeModal()
+  alert('Hasło zostało zmienione.')
+}
+
 export function showView(name) {
+  if (name === 'admin' && !isAdmin()) {
+    alert('Zakładka Administracja jest dostępna tylko dla administratora.')
+    return
+  }
   state.view = name
   closeDrawer()
 }
@@ -201,7 +264,15 @@ export async function submitReview(payload) {
   }
 }
 
-export function openFmeaForm(item) {
+export async function openFmeaForm(item) {
+  if (!state.users.length) {
+    try {
+      await loadUsers()
+    } catch (err) {
+      alert(err.message)
+      return
+    }
+  }
   state.editingId = item ? item.id : null
   state.editingFmea = item ? { ...item } : null
   state.modal = 'fmea'
@@ -303,18 +374,26 @@ export function exportCp() {
   window.location.href = appUrl(`/api/cp/export?${params.toString()}`)
 }
 
-export async function importFmea(file) {
-  if (!confirm(`Nadpisać rejestr FMEA plikiem „${file.name}”?`)) return
-  const result = await upload('/api/import', file)
-  alert(`Zaimportowano ${result.fmea} FMEA i ${result.reviews} przeglądów. Nowi użytkownicy: ${result.users || 0}.`)
+const importFormatLabel = (format) => (
+  format === 'app' ? 'struktura z eksportu aplikacji' : 'format oryginalny (legacy)'
+)
+
+export async function importFmea(file, format = 'legacy') {
+  const kind = importFormatLabel(format)
+  if (!confirm(`Nadpisać rejestr FMEA (${kind}) plikiem „${file.name}”?`)) return
+  const result = await upload('/api/import', file, { format })
+  const fmt = result.format === 'app' ? 'eksport aplikacji' : 'oryginalny'
+  alert(`Zaimportowano ${result.fmea} FMEA i ${result.reviews} przeglądów (${fmt}). Nowi użytkownicy: ${result.users || 0}.`)
   closeDrawer()
   await loadList()
 }
 
-export async function importCp(file) {
-  if (!confirm(`Nadpisać rejestr planów kontroli plikiem „${file.name}”?`)) return
-  const result = await upload('/api/cp/import', file)
-  alert(`Zaimportowano ${result.plans} planów, powiązanych z FMEA: ${result.linked}, nieaktywnych: ${result.inactive}. Nowi użytkownicy: ${result.users || 0}.`)
+export async function importCp(file, format = 'legacy') {
+  const kind = importFormatLabel(format)
+  if (!confirm(`Nadpisać rejestr planów kontroli (${kind}) plikiem „${file.name}”?`)) return
+  const result = await upload('/api/cp/import', file, { format })
+  const fmt = result.format === 'app' ? 'eksport aplikacji' : 'oryginalny'
+  alert(`Zaimportowano ${result.plans} planów (${fmt}), powiązanych z FMEA: ${result.linked}, nieaktywnych: ${result.inactive}. Nowi użytkownicy: ${result.users || 0}.`)
   closeDrawer()
   await loadCp()
 }
@@ -339,7 +418,15 @@ export function toggleVisibleCp(checked) {
   for (const item of filteredCp.value) toggleCp(item.id, checked)
 }
 
-export function openCpForm(item) {
+export async function openCpForm(item) {
+  if (!state.users.length) {
+    try {
+      await loadUsers()
+    } catch (err) {
+      alert(err.message)
+      return
+    }
+  }
   state.editingCpId = item ? item.id : null
   state.editingCp = item ? { ...item } : null
   state.modal = 'cp'
@@ -366,6 +453,10 @@ export async function confirmCpUnchanged() {
 }
 
 export function openUserForm(user) {
+  if (!isAdmin()) {
+    alert('Tylko administrator może zarządzać użytkownikami.')
+    return
+  }
   state.editingUser = user ? { ...user } : null
   state.modal = 'user'
 }
@@ -380,10 +471,85 @@ export async function submitUser(payload) {
   await loadUsers()
 }
 
-export async function deleteUser(user) {
-  if (!confirm(`Usunąć użytkownika ${userName(user)}?`)) return
-  await api(`/api/users/${user.id}`, { method: 'DELETE' })
+export function assignmentKey(row) {
+  return `${row.kind}:${row.id}`
+}
+
+export async function openDeleteUser(user) {
+  try {
+    if (!state.users.length) await loadUsers()
+    const data = await api(`/api/users/${user.id}/assignments`)
+    state.deletingUser = user
+    state.userDeleteAssignments = data.items
+    state.userDeleteReplacements = {}
+    for (const row of data.items) {
+      state.userDeleteReplacements[assignmentKey(row)] = ''
+    }
+    state.userDeleteSelected = new Set()
+    state.userDeleteBulkUserId = state.users.find((u) => u.id !== user.id)?.id
+      ? String(state.users.find((u) => u.id !== user.id).id)
+      : ''
+    state.modal = 'deleteUser'
+  } catch (err) {
+    alert(err.message)
+  }
+}
+
+export function toggleUserDeleteRow(key, checked) {
+  if (checked) state.userDeleteSelected.add(key)
+  else state.userDeleteSelected.delete(key)
+}
+
+export function applyBulkUserDeleteReplacement() {
+  const replacement = state.userDeleteBulkUserId
+  if (!replacement) {
+    alert('Wybierz użytkownika do grupowego zastąpienia.')
+    return
+  }
+  if (!state.userDeleteSelected.size) {
+    alert('Zaznacz pozycje, którym ustawisz to samo zastępstwo.')
+    return
+  }
+  for (const key of state.userDeleteSelected) {
+    state.userDeleteReplacements[key] = replacement
+  }
+}
+
+export async function submitDeleteUser() {
+  const user = state.deletingUser
+  if (!user) return
+  const replacements = state.userDeleteAssignments.map((row) => {
+    const key = assignmentKey(row)
+    return {
+      kind: row.kind,
+      id: row.id,
+      user_id: Number(state.userDeleteReplacements[key] || 0),
+    }
+  })
+  if (replacements.some((row) => !row.user_id)) {
+    alert('Wybierz zastępcę dla każdej przypisanej pozycji.')
+    return
+  }
+  if (replacements.some((row) => row.user_id === user.id)) {
+    alert('Zastępca nie może być usuwanym użytkownikiem.')
+    return
+  }
+  const label = replacements.length
+    ? `Usunąć ${userName(user)} po przepisaniu ${replacements.length} pozycji?`
+    : `Usunąć użytkownika ${userName(user)}?`
+  if (!confirm(label)) return
+  await api(`/api/users/${user.id}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ replacements }),
+  })
+  closeModal()
+  state.deletingUser = null
+  state.userDeleteAssignments = []
+  state.userDeleteReplacements = {}
+  state.userDeleteSelected.clear()
   await loadUsers()
+  if (state.view === 'fmea') await loadList()
+  else if (state.view === 'cp') await loadCp()
 }
 
 export async function openPersonModal(kind) {

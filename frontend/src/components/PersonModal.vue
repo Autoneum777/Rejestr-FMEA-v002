@@ -14,7 +14,7 @@ watch(() => state.modal, (modal) => {
 })
 
 function optionLabel(user) {
-  return `${userName(user)}${user.dzial ? ` · ${user.dzial}` : ''}${user.email ? ` · ${user.email}` : ''}`
+  return userName(user)
 }
 
 async function onSubmit() {

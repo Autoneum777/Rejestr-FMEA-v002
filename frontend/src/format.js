@@ -37,6 +37,20 @@ export function userName(user) {
   return `${user.imie} ${user.nazwisko}`
 }
 
+export function userIdFromResponsible(text, users) {
+  if (!text || !users?.length) return ''
+  const fold = (value) => String(value || '').trim().toLowerCase()
+  for (const part of String(text).split(/\s*\/\s*/)) {
+    const needle = fold(part)
+    if (!needle) continue
+    const hit = users.find((user) => (
+      fold(userName(user)) === needle || fold(user.login) === needle
+    ))
+    if (hit) return String(hit.id)
+  }
+  return ''
+}
+
 export function blank(value) {
   const text = value == null ? '' : String(value)
   return text === '' ? '—' : text

@@ -1,12 +1,11 @@
 <script setup>
-import { computed, reactive, watch } from 'vue'
-import { addMonths, fmtDate, today } from '../format'
+import { computed, reactive, ref, watch } from 'vue'
+import { addMonths, fmtDate, today, userIdFromResponsible, userName } from '../format'
 import { closeModal, state, submitCp } from '../store'
 
 const empty = () => ({
   nr_planu: '',
   nr_fmea: '',
-  qe: '',
   symbol_wyrobu: '',
   model: '',
   nr_rysunku: '',
@@ -23,12 +22,18 @@ const empty = () => ({
 })
 
 const form = reactive(empty())
+const userId = ref('')
 const creating = computed(() => !state.editingCpId)
 const preview = computed(() => (
   form.data_rewizji
     ? `Termin kolejnej rewizji: ${fmtDate(addMonths(form.data_rewizji, 12))}`
     : 'Termin kolejnej rewizji: —'
 ))
+const userOptions = computed(() => state.users)
+
+function optionLabel(user) {
+  return userName(user)
+}
 
 watch(() => state.modal, (modal) => {
   if (modal !== 'cp') return
@@ -36,11 +41,11 @@ watch(() => state.modal, (modal) => {
   const item = state.editingCp
   if (!item) {
     form.data_rewizji = today()
+    userId.value = ''
     return
   }
   form.nr_planu = item.nr_planu || ''
   form.nr_fmea = item.nr_fmea || ''
-  form.qe = item.qe || item.osoba_wiodaca || ''
   form.symbol_wyrobu = item.symbol_wyrobu || ''
   form.model = item.model || ''
   form.nr_rysunku = item.nr_rysunku || ''
@@ -52,6 +57,7 @@ watch(() => state.modal, (modal) => {
   form.nr_rewizji = item.nr_rewizji || ''
   form.data_anulowania = (item.data_anulowania || '').slice(0, 10)
   form.uwagi = item.uwagi || ''
+  userId.value = userIdFromResponsible(item.qe || item.osoba_wiodaca || '', state.users)
 })
 
 async function onSubmit() {
@@ -59,10 +65,14 @@ async function onSubmit() {
     alert('Podaj powód rewizji.')
     return
   }
+  if (!userId.value) {
+    alert('Wybierz odpowiedzialnego QE z listy użytkowników.')
+    return
+  }
   const payload = {
     nr_planu: form.nr_planu,
     nr_fmea: form.nr_fmea,
-    qe: form.qe,
+    user_id: Number(userId.value),
     symbol_wyrobu: form.symbol_wyrobu,
     model: form.model,
     nr_rysunku: form.nr_rysunku,
@@ -93,7 +103,13 @@ async function onSubmit() {
       <h3>{{ creating ? 'Nowy plan kontroli' : `Edycja ${state.editingCp?.nr_planu || ''}` }}</h3>
       <label>Plan kontroli nr <input v-model="form.nr_planu" required /></label>
       <label>Numer FMEA <input v-model="form.nr_fmea" /></label>
-      <label>Odpowiedzialny QE <input v-model="form.qe" /></label>
+      <label>Odpowiedzialny QE
+        <select v-model="userId" required>
+          <option value="">— wybierz użytkownika —</option>
+          <option v-for="user in userOptions" :key="user.id" :value="String(user.id)">{{ optionLabel(user) }}</option>
+        </select>
+      </label>
+      <p v-if="!userOptions.length" class="hint">Dodaj użytkowników na zakładce Użytkownicy albo zaimportuj plik Excel.</p>
       <label>Symbol wyrobu <input v-model="form.symbol_wyrobu" /></label>
       <label>Model samochodu <input v-model="form.model" /></label>
       <label>Nr rysunku lub części <input v-model="form.nr_rysunku" /></label>
@@ -119,7 +135,7 @@ async function onSubmit() {
       <label>Uwagi <textarea v-model="form.uwagi" rows="2"></textarea></label>
       <div class="modal-actions">
         <button type="button" class="btn ghost" @click="closeModal">Anuluj</button>
-        <button type="submit" class="btn">Zapisz</button>
+        <button type="submit" class="btn" :disabled="!userOptions.length">Zapisz</button>
       </div>
     </form>
   </div>

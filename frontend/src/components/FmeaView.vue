@@ -4,16 +4,14 @@ import StatsBar from './StatsBar.vue'
 import { useStickyHead } from '../sticky'
 import { fmtDate, statusLabel } from '../format'
 import {
+  canEdit,
   exportFmea,
   filteredFmea,
-  importFmea,
   loadList,
   openFmeaDrawer,
   openFmeaForm,
   openPersonModal,
-  openPurge,
   openReview,
-  openSettings,
   setFmeaFilter,
   state,
   toggleFmea,
@@ -21,8 +19,9 @@ import {
 } from '../store'
 
 const table = ref(null)
-const file = ref(null)
 useStickyHead(table)
+
+const colSpan = () => (canEdit() ? 10 : 9)
 
 const cards = [
   { key: 'total', label: 'Pozycji na liście' },
@@ -57,17 +56,6 @@ function activeFilter(filter) {
   return state.status === filter.status && state.aktywne === filter.aktywne
 }
 
-async function onFile(event) {
-  const picked = event.target.files?.[0]
-  event.target.value = ''
-  if (!picked) return
-  try {
-    await importFmea(picked)
-  } catch (err) {
-    alert(err.message)
-  }
-}
-
 function onRowClick(event, id) {
   if (event.target.closest('button, input, a')) return
   openFmeaDrawer(id).catch((err) => alert(err.message))
@@ -81,13 +69,11 @@ function onRowClick(event, id) {
       <h1>Rejestr FMEA</h1>
     </div>
     <div class="top-actions">
-      <button type="button" class="btn ghost" @click="openSettings">Kolorystyka</button>
-      <button type="button" class="btn ghost" @click="file.click()">Wczytaj plik Excel</button>
-      <input ref="file" type="file" accept=".xlsx,.xlsm" hidden @change="onFile" />
       <button type="button" class="btn blue" @click="exportFmea">Eksport do Excela</button>
-      <button type="button" class="btn ghost" @click="openPersonModal('fmea')">Zmień osobę</button>
-      <button type="button" class="btn" @click="openFmeaForm(null)">Nowe FMEA</button>
-      <button type="button" class="btn danger" @click="openPurge('fmea')">Wyczyść bazę</button>
+      <template v-if="canEdit()">
+        <button type="button" class="btn ghost" @click="openPersonModal('fmea')">Zmień osobę</button>
+        <button type="button" class="btn" @click="openFmeaForm(null)">Nowe FMEA</button>
+      </template>
     </div>
   </header>
 
@@ -111,7 +97,7 @@ function onRowClick(event, id) {
     <table ref="table">
       <thead>
         <tr>
-          <th class="check"><input type="checkbox" title="Zaznacz widoczne" :checked="state.fmeaCheckAll" @change="toggleVisibleFmea($event.target.checked)" /></th>
+          <th v-if="canEdit()" class="check"><input type="checkbox" title="Zaznacz widoczne" :checked="state.fmeaCheckAll" @change="toggleVisibleFmea($event.target.checked)" /></th>
           <th>Nr FMEA</th>
           <th>Wyroby gotowe (PN)</th>
           <th>Projekt</th>
@@ -120,10 +106,10 @@ function onRowClick(event, id) {
           <th>Data obecnego FMEA</th>
           <th>Powód ost. rewizji</th>
           <th>Termin kolejnej rewizji</th>
-          <th></th>
+          <th v-if="canEdit()"></th>
         </tr>
         <tr class="filters-row">
-          <th></th>
+          <th v-if="canEdit()"></th>
           <th><input v-model="state.fmeaCols.nr_fmea" placeholder="Filtr" /></th>
           <th><input v-model="state.fmeaCols.part_numbers" placeholder="Filtr" /></th>
           <th><input v-model="state.fmeaCols.projekt" placeholder="Filtr" /></th>
@@ -132,12 +118,12 @@ function onRowClick(event, id) {
           <th><input v-model="state.fmeaCols.current_fmea_date" placeholder="rrrr-mm-dd" /></th>
           <th><input v-model="state.fmeaCols.last_review_reason" placeholder="Filtr" /></th>
           <th><input v-model="state.fmeaCols.next_due_date" placeholder="rrrr-mm-dd" /></th>
-          <th></th>
+          <th v-if="canEdit()"></th>
         </tr>
       </thead>
       <tbody>
-        <tr v-if="state.listError"><td colspan="10">{{ state.listError }}</td></tr>
-        <tr v-else-if="!filteredFmea.length"><td colspan="10" class="muted">Brak rekordów.</td></tr>
+        <tr v-if="state.listError"><td :colspan="colSpan()">{{ state.listError }}</td></tr>
+        <tr v-else-if="!filteredFmea.length"><td :colspan="colSpan()" class="muted">Brak rekordów.</td></tr>
         <tr
           v-for="item in filteredFmea"
           :key="item.id"
@@ -145,7 +131,7 @@ function onRowClick(event, id) {
           :class="item.aktywne ? `row-${item.status}` : 'row-inactive'"
           @click="onRowClick($event, item.id)"
         >
-          <td class="check"><input type="checkbox" :checked="state.selectedFmea.has(item.id)" @change="toggleFmea(item.id, $event.target.checked)" /></td>
+          <td v-if="canEdit()" class="check"><input type="checkbox" :checked="state.selectedFmea.has(item.id)" @change="toggleFmea(item.id, $event.target.checked)" /></td>
           <td><strong>{{ item.nr_fmea }}</strong></td>
           <td class="pn">{{ item.part_numbers || '—' }}</td>
           <td>{{ item.projekt || '—' }}</td>
@@ -157,7 +143,7 @@ function onRowClick(event, id) {
             {{ fmtDate(item.next_due_date) }}
             <div class="muted">{{ item.aktywne ? statusLabel(item.status) : 'Nieaktywne' }}</div>
           </td>
-          <td><button type="button" class="btn small" @click="openReview(item.id, 'fmea')">Aktualizuj datę</button></td>
+          <td v-if="canEdit()"><button type="button" class="btn small" @click="openReview(item.id, 'fmea')">Aktualizuj datę</button></td>
         </tr>
       </tbody>
     </table>

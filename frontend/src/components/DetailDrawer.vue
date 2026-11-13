@@ -10,6 +10,7 @@ import {
   openReview,
   state,
   toggleFmeaActive,
+  canEdit,
 } from '../store'
 
 const item = computed(() => state.detail?.item || null)
@@ -98,7 +99,7 @@ async function run(action) {
       </table>
     </section>
 
-    <div class="drawer-actions">
+    <div v-if="canEdit()" class="drawer-actions">
       <button v-if="!isFmea && item.wymaga_weryfikacji" type="button" class="btn" @click="run(confirmCpUnchanged)">Potwierdź: dokument nie wymaga aktualizacji</button>
       <button type="button" class="btn" @click="openReview(item.id, isFmea ? 'fmea' : 'cp')">{{ isFmea ? 'Aktualizuj datę FMEA' : 'Aktualizuj datę' }}</button>
       <button v-if="isFmea" type="button" class="btn ghost" @click="openFmeaForm(item)">Edytuj dane</button>

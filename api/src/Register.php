@@ -44,7 +44,7 @@ final class Register
         return $this->addedUsers;
     }
 
-    public function rememberResponsible(string $raw): string
+    public function rememberResponsible(string $raw, bool $allowCreate = true): string
     {
         $raw = trim(preg_replace('/\s+/u', ' ', str_replace(["\r\n", "\r"], "\n", $raw)) ?? '');
         if ($raw === '') {
@@ -59,12 +59,37 @@ final class Register
             }
             $person = $this->splitPerson($part);
             if ($person === null) {
-                $names[] = $part;
+                if ($allowCreate) {
+                    $names[] = $part;
+                    continue;
+                }
+                $names[] = $this->resolveExistingResponsibleName($part);
                 continue;
             }
-            $names[] = $this->ensureUser($person['imie'], $person['nazwisko']);
+            if ($allowCreate) {
+                $names[] = $this->ensureUser($person['imie'], $person['nazwisko']);
+            } else {
+                $existing = $this->findUser($person['imie'], $person['nazwisko']);
+                if ($existing === null) {
+                    Http::json(['error' => 'Wybierz użytkownika z listy. Nowych użytkowników tworzy tylko import Excela.'], 400);
+                }
+                $names[] = $this->canonicalUserName($existing);
+            }
         }
         return implode(' / ', $names);
+    }
+
+    public function responsibleFromRequest(array $data, string $textField): string
+    {
+        $userId = (int) ($data['user_id'] ?? 0);
+        if ($userId > 0) {
+            $user = $this->db->one('SELECT * FROM users WHERE id = ?', [$userId]);
+            if ($user === null) {
+                Http::json(['error' => 'Wybierz użytkownika z listy'], 400);
+            }
+            return $this->canonicalUserName($user);
+        }
+        return $this->rememberResponsible(Support::text($data[$textField] ?? ''), false);
     }
 
     public function listFmea(string $q, string $status, string $aktywne): array
@@ -83,8 +108,10 @@ final class Register
         if ($row === null) {
             Http::json(['error' => 'Nie znaleziono FMEA'], 404);
         }
+        $item = $this->db->enrich($row);
+        $item['osoba_wiodaca'] = $this->normalizeResponsibleField((string) ($item['osoba_wiodaca'] ?? ''));
         return [
-            'item' => $this->db->enrich($row),
+            'item' => $item,
             'reviews' => $this->db->all(
                 'SELECT * FROM reviews WHERE fmea_id = ? ORDER BY review_date DESC, id DESC',
                 [$id]
@@ -125,7 +152,7 @@ final class Register
                 Support::text($data['part_numbers'] ?? ''),
                 Support::text($data['projekt'] ?? ''),
                 Support::text($data['rodzaj_wyrobu'] ?? ''),
-                $this->rememberResponsible(Support::text($data['osoba_wiodaca'] ?? '')),
+                $this->responsibleFromRequest($data, 'osoba_wiodaca'),
                 Support::iso($fmeaDate),
                 Support::iso($nextDue),
                 Support::iso($warning),
@@ -167,7 +194,7 @@ final class Register
             Http::json(['error' => 'Nie znaleziono FMEA'], 404);
         }
         $this->db->pdo->beginTransaction();
-        $fields['osoba_wiodaca'] = $this->rememberResponsible($fields['osoba_wiodaca']);
+        $fields['osoba_wiodaca'] = $this->responsibleFromRequest($data, 'osoba_wiodaca');
         $this->db->logChanges('fmea', $id, $before, $fields, [
             ['nr_fmea', 'Nr FMEA'],
             ['part_numbers', 'Wyroby gotowe'],
@@ -298,9 +325,25 @@ final class Register
     public function listUsers(): array
     {
         return [
-            'items' => $this->db->all('SELECT * FROM users ORDER BY nazwisko, imie'),
+            'items' => array_map(fn (array $row) => $this->publicUser($row), $this->db->all('SELECT * FROM users ORDER BY nazwisko, imie')),
             'mail' => (new Mailer())->status(),
         ];
+    }
+
+    public function allocateLogin(string $imie, string $nazwisko, ?int $exceptId = null): string
+    {
+        $base = strtolower(preg_replace('/[^a-z0-9]+/', '.', Support::fold(trim($imie . '.' . $nazwisko))) ?? 'user');
+        $base = trim($base, '.');
+        if ($base === '') {
+            $base = 'user';
+        }
+        $candidate = $base;
+        $suffix = 1;
+        while ($this->loginTaken($candidate, $exceptId)) {
+            $suffix++;
+            $candidate = $base . $suffix;
+        }
+        return $candidate;
     }
 
     public function saveUser(?int $id, array $data): array
@@ -309,6 +352,8 @@ final class Register
         $nazwisko = Support::text($data['nazwisko'] ?? '');
         $email = Support::text($data['email'] ?? '');
         $dzial = strtoupper(Support::text($data['dzial'] ?? ''));
+        $login = strtolower(Support::text($data['login'] ?? ''));
+        $password = (string) ($data['password'] ?? '');
         if ($imie === '' || $nazwisko === '') {
             Http::json(['error' => 'Podaj imię i nazwisko'], 400);
         }
@@ -322,11 +367,20 @@ final class Register
         if ($duplicate !== null && (int) $duplicate['id'] !== (int) $id) {
             Http::json(['error' => 'Użytkownik o tym imieniu i nazwisku już jest'], 400);
         }
+        $role = Support::text($data['role'] ?? '') === 'admin' ? 'admin' : 'user';
         $stamp = Support::now();
         if ($id === null) {
+            if ($login === '') {
+                $login = $this->allocateLogin($imie, $nazwisko, null);
+            }
+            if ($this->loginTaken($login, null)) {
+                Http::json(['error' => 'Login jest już zajęty'], 400);
+            }
+            $hash = $password !== '' ? Auth::hashPassword($password) : Auth::hashPassword(Auth::DEFAULT_PASSWORD);
             $this->db->exec(
-                'INSERT INTO users (imie, nazwisko, email, dzial, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-                [$imie, $nazwisko, $email, $dzial, $stamp, $stamp]
+                'INSERT INTO users (imie, nazwisko, email, dzial, login, password_hash, role, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [$imie, $nazwisko, $email, $dzial, $login, $hash, $role, $stamp, $stamp]
             );
             $id = $this->db->lastId();
         } else {
@@ -334,23 +388,133 @@ final class Register
             if ($existing === null) {
                 Http::json(['error' => 'Nie znaleziono użytkownika'], 404);
             }
-            $this->db->exec(
-                'UPDATE users SET imie = ?, nazwisko = ?, email = ?, dzial = ?, updated_at = ? WHERE id = ?',
-                [$imie, $nazwisko, $email, $dzial, $stamp, $id]
-            );
+            $role = $this->resolveRoleChange($existing, $role);
+            if ($this->isSystemAdmin($existing)) {
+                $login = (string) ($existing['login'] ?? Auth::ADMIN_LOGIN);
+            } elseif ($login !== '') {
+                if ($this->loginTaken($login, $id)) {
+                    Http::json(['error' => 'Login jest już zajęty'], 400);
+                }
+            } else {
+                $login = (string) ($existing['login'] ?? '');
+                if ($login === '') {
+                    $login = $this->allocateLogin($imie, $nazwisko, $id);
+                }
+            }
+            $fields = [$imie, $nazwisko, $email, $dzial, $login, $role, $stamp, $id];
+            $sql = 'UPDATE users SET imie = ?, nazwisko = ?, email = ?, dzial = ?, login = ?, role = ?, updated_at = ?';
+            if ($password !== '') {
+                $sql .= ', password_hash = ?';
+                $fields = [$imie, $nazwisko, $email, $dzial, $login, $role, $stamp, Auth::hashPassword($password), $id];
+            }
+            $sql .= ' WHERE id = ?';
+            $this->db->exec($sql, $fields);
         }
         $this->userCache = null;
-        return ['item' => $this->db->one('SELECT * FROM users WHERE id = ?', [$id])];
+        $row = $this->db->one('SELECT * FROM users WHERE id = ?', [$id]);
+        return ['item' => $this->publicUser($row ?? [])];
     }
 
-    public function deleteUser(int $id): array
+    public function userAssignments(int $id): array
     {
-        $existing = $this->db->one('SELECT * FROM users WHERE id = ?', [$id]);
-        if ($existing === null) {
+        $user = $this->db->one('SELECT * FROM users WHERE id = ?', [$id]);
+        if ($user === null) {
             Http::json(['error' => 'Nie znaleziono użytkownika'], 404);
         }
+        $items = [];
+        foreach ($this->db->all('SELECT id, nr_fmea, osoba_wiodaca FROM fmea ORDER BY CAST(nr_fmea AS INTEGER), nr_fmea') as $row) {
+            $field = (string) ($row['osoba_wiodaca'] ?? '');
+            if (!$this->fieldContainsUser($field, $user)) {
+                continue;
+            }
+            $items[] = [
+                'kind' => 'fmea',
+                'id' => (int) $row['id'],
+                'label' => (string) $row['nr_fmea'],
+                'role' => 'Osoba wiodąca',
+                'current' => $field,
+            ];
+        }
+        foreach ($this->db->all('SELECT id, nr_planu, qe FROM control_plans ORDER BY nr_planu') as $row) {
+            $field = (string) ($row['qe'] ?? '');
+            if (!$this->fieldContainsUser($field, $user)) {
+                continue;
+            }
+            $items[] = [
+                'kind' => 'cp',
+                'id' => (int) $row['id'],
+                'label' => (string) $row['nr_planu'],
+                'role' => 'Odpowiedzialny QE',
+                'current' => $field,
+            ];
+        }
+        return ['items' => $items, 'user' => $user];
+    }
+
+    public function deleteUser(int $id, array $data): array
+    {
+        $user = $this->db->one('SELECT * FROM users WHERE id = ?', [$id]);
+        if ($user === null) {
+            Http::json(['error' => 'Nie znaleziono użytkownika'], 404);
+        }
+        if ($this->isSystemAdmin($user)) {
+            Http::json(['error' => 'Nie można usunąć głównego konta administratora (admin).'], 400);
+        }
+        if (($user['role'] ?? '') === 'admin' && $this->countAdmins() <= 1) {
+            Http::json(['error' => 'Musi zostać co najmniej jeden administrator.'], 400);
+        }
+        $assignments = $this->userAssignments($id)['items'];
+        $byKey = [];
+        foreach ((array) ($data['replacements'] ?? []) as $entry) {
+            $kind = Support::text($entry['kind'] ?? '');
+            $entityId = (int) ($entry['id'] ?? 0);
+            $replacementId = (int) ($entry['user_id'] ?? 0);
+            if ($entityId <= 0 || !in_array($kind, ['fmea', 'cp'], true)) {
+                continue;
+            }
+            $byKey["{$kind}:{$entityId}"] = $replacementId;
+        }
+        if ($assignments !== []) {
+            foreach ($assignments as $assignment) {
+                $key = $assignment['kind'] . ':' . $assignment['id'];
+                if (!array_key_exists($key, $byKey) || $byKey[$key] <= 0) {
+                    Http::json(['error' => 'Wybierz zastępstwo dla wszystkich przypisanych pozycji'], 400);
+                }
+                if ($byKey[$key] === $id) {
+                    Http::json(['error' => 'Zastępca nie może być tym samym użytkownikiem'], 400);
+                }
+            }
+        }
+        $this->db->pdo->beginTransaction();
+        foreach ($assignments as $assignment) {
+            $key = $assignment['kind'] . ':' . $assignment['id'];
+            $replacement = $this->db->one('SELECT * FROM users WHERE id = ?', [$byKey[$key]]);
+            if ($replacement === null) {
+                $this->db->pdo->rollBack();
+                Http::json(['error' => 'Nie znaleziono użytkownika zastępcy'], 400);
+            }
+            if ($assignment['kind'] === 'fmea') {
+                $before = $this->db->one('SELECT * FROM fmea WHERE id = ?', [$assignment['id']]);
+                if ($before === null) {
+                    continue;
+                }
+                $name = $this->swapUserInResponsible((string) ($before['osoba_wiodaca'] ?? ''), $user, $replacement);
+                $this->db->logChanges('fmea', $assignment['id'], $before, ['osoba_wiodaca' => $name], [['osoba_wiodaca', 'Osoba wiodąca']]);
+                $this->db->exec('UPDATE fmea SET osoba_wiodaca = ?, updated_at = ? WHERE id = ?', [$name, Support::now(), $assignment['id']]);
+            } else {
+                $before = $this->db->one('SELECT * FROM control_plans WHERE id = ?', [$assignment['id']]);
+                if ($before === null) {
+                    continue;
+                }
+                $name = $this->swapUserInResponsible((string) ($before['qe'] ?? ''), $user, $replacement);
+                $this->db->logChanges('cp', $assignment['id'], $before, ['qe' => $name], [['qe', 'Odpowiedzialny QE']]);
+                $this->db->exec('UPDATE control_plans SET qe = ?, updated_at = ? WHERE id = ?', [$name, Support::now(), $assignment['id']]);
+            }
+        }
         $this->db->exec('DELETE FROM users WHERE id = ?', [$id]);
-        return ['ok' => true];
+        $this->userCache = null;
+        $this->db->pdo->commit();
+        return ['ok' => true, 'reassigned' => count($assignments)];
     }
 
     public function assignResponsible(string $kind, array $data): array
@@ -464,7 +628,7 @@ final class Register
             [
                 $nr,
                 Support::normNr($data['nr_fmea'] ?? ''),
-                $this->rememberResponsible(Support::text($data['qe'] ?? '')),
+                $this->responsibleFromRequest($data, 'qe'),
                 Support::text($data['symbol_wyrobu'] ?? ''),
                 Support::text($data['model'] ?? ''),
                 Support::text($data['nazwa_wyrobu'] ?? ''),
@@ -528,7 +692,7 @@ final class Register
             Http::json(['error' => 'Nie znaleziono planu kontroli'], 404);
         }
         $this->db->pdo->beginTransaction();
-        $fields['qe'] = $this->rememberResponsible($fields['qe']);
+        $fields['qe'] = $this->responsibleFromRequest($data, 'qe');
         $this->db->logChanges('cp', $id, $before, $fields, self::CP_TRACKED);
         $this->db->exec(
             'UPDATE control_plans
@@ -634,10 +798,11 @@ final class Register
     private function filteredFmea(string $q, string $status, string $aktywne): array
     {
         $settings = $this->db->settings();
-        $items = array_map(
-            fn (array $row) => $this->db->enrich($row, $settings),
-            $this->db->all('SELECT * FROM fmea ORDER BY CAST(nr_fmea AS INTEGER), nr_fmea')
-        );
+        $items = array_map(function (array $row) use ($settings) {
+            $item = $this->db->enrich($row, $settings);
+            $item['osoba_wiodaca'] = $this->normalizeResponsibleField((string) ($item['osoba_wiodaca'] ?? ''));
+            return $item;
+        }, $this->db->all('SELECT * FROM fmea ORDER BY CAST(nr_fmea AS INTEGER), nr_fmea'));
         if ($q !== '') {
             $items = array_values(array_filter($items, fn (array $item) => str_contains($this->haystack($item, self::FMEA_SEARCH), $q)));
         }
@@ -706,7 +871,7 @@ final class Register
                 continue;
             }
             $people[$nr] = [
-                'osoba_wiodaca' => $row['osoba_wiodaca'] ?: '',
+                'osoba_wiodaca' => $this->normalizeResponsibleField((string) ($row['osoba_wiodaca'] ?? '')),
                 'projekt' => $row['projekt'] ?: '',
             ];
         }
@@ -722,11 +887,44 @@ final class Register
             && ($item['status'] ?? '') !== 'przeterminowane') {
             $item['status'] = 'wymaga_weryfikacji';
         }
+        $qe = $this->normalizeResponsibleField((string) ($row['qe'] ?? ''));
+        $item['qe'] = $qe;
         $linked = $people[Support::normNr($item['nr_fmea'] ?? '')] ?? null;
         $item['fmea_linked'] = $linked !== null;
         $item['fmea_projekt'] = $linked['projekt'] ?? '';
-        $item['osoba_wiodaca'] = ($item['qe'] ?? '') !== '' ? $item['qe'] : ($linked['osoba_wiodaca'] ?? '');
+        $item['osoba_wiodaca'] = $qe !== '' ? $qe : ($linked['osoba_wiodaca'] ?? '');
         return $item;
+    }
+
+    public function repairResponsibleNames(): void
+    {
+        $stamp = Support::now();
+        foreach ($this->db->all('SELECT id, osoba_wiodaca FROM fmea') as $row) {
+            $fixed = $this->normalizeResponsibleField((string) ($row['osoba_wiodaca'] ?? ''));
+            if ($fixed !== (string) ($row['osoba_wiodaca'] ?? '')) {
+                $this->db->exec('UPDATE fmea SET osoba_wiodaca = ?, updated_at = ? WHERE id = ?', [$fixed, $stamp, (int) $row['id']]);
+            }
+        }
+        foreach ($this->db->all('SELECT id, qe FROM control_plans') as $row) {
+            $fixed = $this->normalizeResponsibleField((string) ($row['qe'] ?? ''));
+            if ($fixed !== (string) ($row['qe'] ?? '')) {
+                $this->db->exec('UPDATE control_plans SET qe = ?, updated_at = ? WHERE id = ?', [$fixed, $stamp, (int) $row['id']]);
+            }
+        }
+    }
+
+    public function normalizeResponsibleField(string $raw): string
+    {
+        $parts = $this->splitResponsibleNames($raw);
+        if ($parts === []) {
+            return '';
+        }
+        $out = [];
+        foreach ($parts as $part) {
+            $user = $this->findUserByToken($part);
+            $out[] = $user !== null ? $this->canonicalUserName($user) : $part;
+        }
+        return implode(' / ', $out);
     }
 
     private function markCpAfterFmeaUpdate(array $fmea, string $stamp): void
@@ -813,6 +1011,66 @@ final class Register
         return ['imie' => $imie, 'nazwisko' => $nazwisko];
     }
 
+    private function canonicalUserName(array $user): string
+    {
+        return trim($user['imie'] . ' ' . $user['nazwisko']);
+    }
+
+  /** @return list<string> */
+    private function splitResponsibleNames(string $raw): array
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return [];
+        }
+        $parts = preg_split('/\s*(?:\/|\n|;)\s*/u', $raw) ?: [];
+        $names = [];
+        foreach ($parts as $part) {
+            $part = trim($part);
+            if ($part !== '') {
+                $names[] = $part;
+            }
+        }
+        return $names;
+    }
+
+    private function fieldContainsUser(string $field, array $user): bool
+    {
+        $target = Support::fold($this->canonicalUserName($user));
+        foreach ($this->splitResponsibleNames($field) as $name) {
+            if (Support::fold($name) === $target) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function swapUserInResponsible(string $field, array $from, array $to): string
+    {
+        $fromKey = Support::fold($this->canonicalUserName($from));
+        $toName = $this->canonicalUserName($to);
+        $parts = $this->splitResponsibleNames($field);
+        if ($parts === []) {
+            return $toName;
+        }
+        $out = [];
+        foreach ($parts as $name) {
+            $out[] = Support::fold($name) === $fromKey ? $toName : $name;
+        }
+        return implode(' / ', array_values(array_unique($out)));
+    }
+
+    private function resolveExistingResponsibleName(string $part): string
+    {
+        $key = Support::fold($part);
+        foreach ($this->users() as $user) {
+            if (Support::fold($this->canonicalUserName($user)) === $key) {
+                return $this->canonicalUserName($user);
+            }
+        }
+        Http::json(['error' => 'Wybierz użytkownika z listy. Nowych użytkowników tworzy tylko import Excela.'], 400);
+    }
+
     private function ensureUser(string $imie, string $nazwisko): string
     {
         $existing = $this->findUser($imie, $nazwisko);
@@ -820,19 +1078,64 @@ final class Register
             return trim($existing['imie'] . ' ' . $existing['nazwisko']);
         }
         $stamp = Support::now();
+        $login = $this->allocateLogin($imie, $nazwisko, null);
         $this->db->exec(
-            'INSERT INTO users (imie, nazwisko, email, dzial, created_at, updated_at) VALUES (?, ?, \'\', \'\', ?, ?)',
-            [$imie, $nazwisko, $stamp, $stamp]
+            'INSERT INTO users (imie, nazwisko, email, dzial, login, password_hash, role, created_at, updated_at)
+             VALUES (?, ?, \'\', \'\', ?, ?, ?, ?, ?)',
+            [$imie, $nazwisko, $login, Auth::hashPassword(Auth::DEFAULT_PASSWORD), 'user', $stamp, $stamp]
         );
+        $newId = $this->db->lastId();
         $this->addedUsers++;
         $this->userCache[] = [
-            'id' => $this->db->lastId(),
+            'id' => $newId,
             'imie' => $imie,
             'nazwisko' => $nazwisko,
             'email' => '',
             'dzial' => '',
+            'login' => $login,
+            'role' => 'user',
         ];
         return trim($imie . ' ' . $nazwisko);
+    }
+
+    /** @param array<string, mixed> $row */
+    private function publicUser(array $row): array
+    {
+        unset($row['password_hash']);
+        return $row;
+    }
+
+    private function loginTaken(string $login, ?int $exceptId): bool
+    {
+        $row = $this->db->one('SELECT id FROM users WHERE login = ?', [strtolower($login)]);
+        if ($row === null) {
+            return false;
+        }
+        return $exceptId === null || (int) $row['id'] !== $exceptId;
+    }
+
+    /** @param array<string, mixed> $existing */
+    private function resolveRoleChange(array $existing, string $requestedRole): string
+    {
+        if ($this->isSystemAdmin($existing)) {
+            return 'admin';
+        }
+        $current = (string) ($existing['role'] ?? 'user');
+        if ($current === 'admin' && $requestedRole === 'user' && $this->countAdmins() <= 1) {
+            Http::json(['error' => 'Musi zostać co najmniej jeden administrator.'], 400);
+        }
+        return $requestedRole === 'admin' ? 'admin' : 'user';
+    }
+
+    /** @param array<string, mixed> $user */
+    private function isSystemAdmin(array $user): bool
+    {
+        return Support::fold((string) ($user['login'] ?? '')) === Support::fold(Auth::ADMIN_LOGIN);
+    }
+
+    private function countAdmins(): int
+    {
+        return (int) ($this->db->one("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'")['n'] ?? 0);
     }
 
     private function findUser(string $imie, string $nazwisko): ?array
@@ -840,6 +1143,23 @@ final class Register
         $key = Support::fold($imie . ' ' . $nazwisko);
         foreach ($this->users() as $user) {
             if (Support::fold($user['imie'] . ' ' . $user['nazwisko']) === $key) {
+                return $user;
+            }
+        }
+        return null;
+    }
+
+    private function findUserByToken(string $token): ?array
+    {
+        $key = Support::fold(trim($token));
+        if ($key === '') {
+            return null;
+        }
+        foreach ($this->users() as $user) {
+            if (Support::fold($this->canonicalUserName($user)) === $key) {
+                return $user;
+            }
+            if (Support::fold((string) ($user['login'] ?? '')) === $key) {
                 return $user;
             }
         }

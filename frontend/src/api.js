@@ -13,6 +13,7 @@ export function appUrl(url) {
 
 export async function api(url, options = {}) {
   const res = await fetch(appUrl(url), {
+    credentials: 'include',
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -29,10 +30,12 @@ export async function api(url, options = {}) {
   return data
 }
 
-export async function upload(url, file) {
+export async function upload(url, file, query = {}) {
   const body = new FormData()
   body.append('file', file)
-  const res = await fetch(appUrl(url), { method: 'POST', body })
+  const params = new URLSearchParams(query)
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  const res = await fetch(appUrl(`${url}${suffix}`), { method: 'POST', body, credentials: 'include' })
   const raw = await res.text()
   let result
   try {

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted } from 'vue'
 import { userName } from '../format'
-import { deleteUser, loadUsers, openUserForm, state } from '../store'
+import { isAdmin, loadUsers, openDeleteUser, openUserForm, state } from '../store'
 
 const hint = computed(() => (
   state.mailReady
@@ -18,7 +18,7 @@ onMounted(async () => {
 })
 
 function remove(user) {
-  deleteUser(user).catch((err) => alert(err.message))
+  openDeleteUser(user)
 }
 </script>
 
@@ -30,7 +30,7 @@ function remove(user) {
       <p class="hint">{{ hint }}</p>
     </div>
     <div class="top-actions">
-      <button type="button" class="btn" @click="openUserForm(null)">Nowy użytkownik</button>
+      <button v-if="isAdmin()" type="button" class="btn" @click="openUserForm(null)">Nowy użytkownik</button>
     </div>
   </header>
 
@@ -38,26 +38,33 @@ function remove(user) {
     <table>
       <thead>
         <tr>
+          <th>Login</th>
           <th>Imię</th>
           <th>Nazwisko</th>
           <th>Dział</th>
           <th>E-mail</th>
+          <th>Uprawnienia</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
-        <tr v-if="state.usersError"><td colspan="5">{{ state.usersError }}</td></tr>
+        <tr v-if="state.usersError"><td colspan="7">{{ state.usersError }}</td></tr>
         <tr v-else-if="!state.users.length">
-          <td colspan="5" class="muted">Brak użytkowników. Pojawią się po wczytaniu Excela z osobą Imię Nazwisko albo M.Nazwisko.</td>
+          <td colspan="7" class="muted">Brak użytkowników. Dodaj ręcznie albo zaimportuj Excel — wtedy tworzą się automatycznie z kolumny odpowiedzialnej.</td>
         </tr>
         <tr v-for="user in state.users" :key="user.id">
+          <td>{{ user.login || '—' }}</td>
           <td>{{ user.imie }}</td>
           <td>{{ user.nazwisko }}</td>
           <td>{{ user.dzial || '—' }}</td>
           <td>{{ user.email || '—' }}</td>
+          <td>{{ user.role === 'admin' ? 'Administrator' : 'Użytkownik' }}</td>
           <td class="row-actions">
-            <button type="button" class="btn small ghost" @click="openUserForm(user)">Edytuj</button>
-            <button type="button" class="btn small danger" @click="remove(user)">Usuń</button>
+            <template v-if="isAdmin()">
+              <button type="button" class="btn small ghost" @click="openUserForm(user)">Edytuj</button>
+              <button v-if="user.login !== 'admin'" type="button" class="btn small danger" @click="remove(user)">Usuń</button>
+            </template>
+            <span v-else class="muted">—</span>
           </td>
         </tr>
       </tbody>
